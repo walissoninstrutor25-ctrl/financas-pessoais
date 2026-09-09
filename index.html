@@ -373,17 +373,16 @@
 <script>
 /* =========================================================
    FIREBASE INIT
-   Reaproveita o mesmo projeto Firebase do app de frota (LOTS),
-   isolado em coleções próprias com prefixo "fin_" para não
-   colidir com os dados da frota.
+   Projeto Firebase próprio deste app, independente de qualquer
+   outro sistema — os dados financeiros ficam só aqui.
    ========================================================= */
 const firebaseConfig = {
-  apiKey: "AIzaSyCxskjcs3PeGTWm4yIQ9B4aaBo_iI7GjPI",
-  authDomain: "lots-gestao-frota.firebaseapp.com",
-  projectId: "lots-gestao-frota",
-  storageBucket: "lots-gestao-frota.firebasestorage.app",
-  messagingSenderId: "735618273131",
-  appId: "1:735618273131:web:9adaf2dadb5fb1ab53c62e"
+  apiKey: "AIzaSyAD8KXQGaBnA_xlnMzp63pn82cqWW6hbC8",
+  authDomain: "financas-pessoais-2a411.firebaseapp.com",
+  projectId: "financas-pessoais-2a411",
+  storageBucket: "financas-pessoais-2a411.firebasestorage.app",
+  messagingSenderId: "15124518487",
+  appId: "1:15124518487:web:70d26295a37f5faaffb512"
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();

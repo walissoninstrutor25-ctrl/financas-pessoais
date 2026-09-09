@@ -1,12 +1,10 @@
 rules_version = '2';
-// Regras de segurança do Firestore para o app Finanças Pessoais (app-financas.html).
+// Regras de segurança do Firestore para o app Finanças Pessoais (index.html).
 //
 // Como aplicar:
-// 1. Abra o Console do Firebase do projeto "lots-gestao-frota"
+// 1. Abra o Console do Firebase do projeto "financas-pessoais-2a411"
 // 2. Vá em Firestore Database > Regras
-// 3. As regras abaixo cuidam apenas das coleções "fin_users" e "fin_households"
-//    usadas por este app. Se o projeto já tiver outras regras (do app de frota),
-//    combine os blocos "match" dentro do mesmo "service cloud.firestore { match /databases/{database}/documents { ... } }".
+// 3. Cole o conteúdo abaixo por cima do que estiver lá (modo de teste) e publique.
 //
 // Modelo: cada "lar" (household) é um documento cujo ID é o próprio código de
 // convite de 6 caracteres. Só quem está no array "members" do lar pode ler/escrever
