@@ -955,12 +955,22 @@ function chartGridColor(){ return getComputedStyle(document.documentElement).get
 /* =========================================================
    PAINEL (DASHBOARD)
    ========================================================= */
+const dashboardFilters = { date: '' };
 function renderDashboard(){
   const ym = state.month;
   const sum = monthSummary(ym);
-  const upcoming = monthBillPayments(ym).filter(b=>!b.paid)
-    .concat(monthBillPayments(ymAdd(ym,1)).filter(b=>!b.paid))
-    .sort((a,b)=> new Date(a.dueDate) - new Date(b.dueDate)).slice(0,6);
+  const filterDate = dashboardFilters.date;
+  let upcoming;
+  if(filterDate){
+    const filterYm = filterDate.slice(0,7);
+    if(filterYm !== ym && filterYm !== ymAdd(ym,1)) ensureMonthGenerated(filterYm);
+    upcoming = state.billPayments.filter(b=>!b.paid && (b.dueDate||'').slice(0,10)===filterDate)
+      .sort((a,b)=> new Date(a.dueDate) - new Date(b.dueDate));
+  } else {
+    upcoming = monthBillPayments(ym).filter(b=>!b.paid)
+      .concat(monthBillPayments(ymAdd(ym,1)).filter(b=>!b.paid))
+      .sort((a,b)=> new Date(a.dueDate) - new Date(b.dueDate)).slice(0,6);
+  }
   const recentTx = state.transactions.slice().sort((a,b)=> (b.date||'').localeCompare(a.date||'') || (b.createdAt||0)-(a.createdAt||0)).slice(0,6);
   const breakdown = categoryBreakdown(ym).slice(0,7);
 
@@ -1007,8 +1017,14 @@ function renderDashboard(){
         ${recentTx.length ? recentTx.map(rowTx).join('') : emptyState('💳','Nenhuma transação lançada ainda.')}
       </div>
       <div class="card card-pad">
-        <h3 style="font-size:14px; margin-bottom:6px;">Próximas contas a vencer</h3>
-        ${upcoming.length ? upcoming.map(rowUpcomingBill).join('') : emptyState('✅','Nenhuma conta pendente por perto.')}
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
+          <h3 style="font-size:14px;">Próximas contas a vencer</h3>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <input type="date" value="${esc(filterDate)}" onchange="dashboardFilters.date=this.value; renderDashboard();" style="width:auto; padding:5px 8px; font-size:12px;" title="Ver contas de uma data específica">
+            ${filterDate?`<button class="icon-btn" onclick="dashboardFilters.date=''; renderDashboard();" title="Limpar filtro">✕</button>`:''}
+          </div>
+        </div>
+        ${upcoming.length ? upcoming.map(rowUpcomingBill).join('') : emptyState('✅', filterDate ? 'Nenhuma conta vence nessa data.' : 'Nenhuma conta pendente por perto.')}
       </div>
     </div>
   `;
