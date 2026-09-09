@@ -474,7 +474,7 @@ function svgIcon(name){ return ICONS[name] || ''; }
 const state = {
   user:null, profile:null, household:null,
   month: ymNow(),
-  categories:[], bills:[], billPayments:[], cards:[], purchases:[], transactions:[], goals:[],
+  categories:[], bills:[], billPayments:[], cards:[], purchases:[], transactions:[], goals:[], incomes:[], incomePayments:[],
   theme: localStorage.getItem('fin_theme') || 'system',
   route: 'dashboard',
   unsub: [],
@@ -676,12 +676,12 @@ auth.onAuthStateChanged(async user=>{
 
 function listenHousehold(householdId){
   const hhRef = db.collection('fin_households').doc(householdId);
-  const collections = ['categories','bills','billPayments','cards','purchases','transactions','goals'];
+  const collections = ['categories','bills','billPayments','cards','purchases','transactions','goals','incomes','incomePayments'];
   state.unsub.push(hhRef.onSnapshot(doc=>{
     state.household = {id:doc.id, ...doc.data()};
     rerenderSoft();
   }));
-  const stateKeyMap = {categories:'categories',bills:'bills',billPayments:'billPayments',cards:'cards',purchases:'purchases',transactions:'transactions',goals:'goals'};
+  const stateKeyMap = {categories:'categories',bills:'bills',billPayments:'billPayments',cards:'cards',purchases:'purchases',transactions:'transactions',goals:'goals',incomes:'incomes',incomePayments:'incomePayments'};
   collections.forEach(cname=>{
     state.unsub.push(hhRef.collection(cname).onSnapshot(snap=>{
       state[stateKeyMap[cname]] = snap.docs.map(d=>({id:d.id, ...d.data()}));
@@ -711,17 +711,27 @@ async function removeDoc(colName, id){
 
 async function ensureMonthGenerated(ym){
   if(!state.household) return;
-  const existing = new Set(state.billPayments.filter(bp=>bp.month===ym).map(bp=>bp.billId));
-  const toCreate = state.bills.filter(b=>b.active!==false && !existing.has(b.id));
-  if(!toCreate.length) return;
+  const existingBills = new Set(state.billPayments.filter(bp=>bp.month===ym).map(bp=>bp.billId));
+  const billsToCreate = state.bills.filter(b=>b.active!==false && !existingBills.has(b.id));
+  const existingIncomes = new Set(state.incomePayments.filter(ip=>ip.month===ym).map(ip=>ip.incomeId));
+  const incomesToCreate = state.incomes.filter(i=>i.active!==false && !existingIncomes.has(i.id));
+  if(!billsToCreate.length && !incomesToCreate.length) return;
   try{
     const batch = db.batch();
-    toCreate.forEach(b=>{
+    billsToCreate.forEach(b=>{
       const ref = hhCol('billPayments').doc();
       batch.set(ref, {
         billId:b.id, month:ym, name:b.name, category:b.category||null,
         amount:Number(b.amount)||0, dueDate: ymDate(ym,b.dueDay).toISOString(),
         paid:false, personId:b.personId||null, createdAt: Date.now()
+      });
+    });
+    incomesToCreate.forEach(i=>{
+      const ref = hhCol('incomePayments').doc();
+      batch.set(ref, {
+        incomeId:i.id, month:ym, name:i.name,
+        amount:Number(i.amount)||0, payDate: ymDate(ym,i.payDay).toISOString(),
+        received:false, personId:i.personId||null, createdAt: Date.now()
       });
     });
     await batch.commit();
@@ -798,6 +808,7 @@ function shiftMonth(delta){
    HELPERS DE CÁLCULO POR MÊS
    ========================================================= */
 function monthBillPayments(ym){ return state.billPayments.filter(b=>b.month===ym); }
+function monthIncomePayments(ym){ return state.incomePayments.filter(i=>i.month===ym); }
 function monthPurchaseCharges(ym){
   const out=[];
   state.purchases.forEach(p=>{
@@ -813,10 +824,13 @@ function monthSummary(ym){
   const cards = monthPurchaseCharges(ym).reduce((s,c)=>s+c.amount,0);
   const txs = monthTransactions(ym);
   const txExpense = txs.filter(t=>t.type==='despesa').reduce((s,t)=>s+(Number(t.amount)||0),0);
-  const income = txs.filter(t=>t.type==='receita').reduce((s,t)=>s+(Number(t.amount)||0),0);
+  const txIncome = txs.filter(t=>t.type==='receita').reduce((s,t)=>s+(Number(t.amount)||0),0);
+  const fixedIncome = monthIncomePayments(ym).reduce((s,i)=>s+(Number(i.amount)||0),0);
+  const income = txIncome + fixedIncome;
   const expense = bills + cards + txExpense;
   const pending = monthBillPayments(ym).filter(b=>!b.paid).reduce((s,b)=>s+(Number(b.amount)||0),0);
-  return {bills, cards, txExpense, income, expense, saldo: income-expense, pending};
+  const pendingIncome = monthIncomePayments(ym).filter(i=>!i.received).reduce((s,i)=>s+(Number(i.amount)||0),0);
+  return {bills, cards, txExpense, txIncome, fixedIncome, income, expense, saldo: income-expense, pending, pendingIncome};
 }
 
 function categoryBreakdown(ym){
@@ -1183,10 +1197,23 @@ function cardChargesForMonth(cardId, ym){
 }
 function cardInvoiceTotal(cardId, ym){ return cardChargesForMonth(cardId, ym).reduce((s,c)=>s+c.amount,0); }
 
+const cardFilters = { cardId: 'all', q: '' };
+function selectCardFilter(cardId){
+  cardFilters.cardId = (cardFilters.cardId === cardId) ? 'all' : cardId;
+  renderCards();
+}
+function clearCardFilter(){ cardFilters.cardId = 'all'; cardFilters.q = ''; renderCards(); }
+
 function renderCards(){
   const ym = state.month;
   const cards = state.cards;
-  const activePurchases = state.purchases.filter(p=>{ const i=installmentForMonth(p, ym); return !!i; });
+  let filterCard = cardFilters.cardId!=='all' ? state.cards.find(c=>c.id===cardFilters.cardId) : null;
+  if(cardFilters.cardId!=='all' && !filterCard) cardFilters.cardId = 'all'; // cartão filtrado foi excluído
+  const q = cardFilters.q.trim().toLowerCase();
+
+  const matchesFilter = p => (cardFilters.cardId==='all' || p.cardId===cardFilters.cardId) && (!q || p.description.toLowerCase().includes(q));
+  const activePurchases = state.purchases.filter(p=>{ const i=installmentForMonth(p, ym); return !!i; }).filter(matchesFilter);
+  const allPurchases = state.purchases.slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).filter(matchesFilter);
 
   $('#view').innerHTML = `
     <div class="view-head">
@@ -1200,31 +1227,37 @@ function renderCards(){
     ${cards.length ? `<div class="grid-charts" style="grid-template-columns:repeat(auto-fill,minmax(230px,1fr));">
       ${cards.map(c=>{
         const total = cardInvoiceTotal(c.id, ym);
-        return `<div class="card card-pad" style="border-top:3px solid ${c.color||'#4f46e5'}">
+        const selected = cardFilters.cardId===c.id;
+        return `<div class="card card-pad" style="border-top:3px solid ${c.color||'#4f46e5'}; cursor:pointer; ${selected?'box-shadow:0 0 0 2px var(--accent);':''}" onclick="selectCardFilter('${c.id}')" title="Ver só as despesas deste cartão">
           <div style="display:flex; justify-content:space-between; align-items:flex-start;">
             <div><div style="font-weight:700; font-size:14px;">${esc(c.name)}</div><div class="hint" style="margin-top:2px;">Fecha dia ${c.closingDay||'-'} · Vence dia ${c.dueDay||'-'}</div></div>
             <div style="display:flex; gap:2px;">
-              <button class="icon-btn" onclick="openCardModal('${c.id}')">${svgIcon('edit')}</button>
-              <button class="icon-btn danger" onclick="deleteCard('${c.id}')">${svgIcon('trash')}</button>
+              <button class="icon-btn" onclick="event.stopPropagation(); openCardModal('${c.id}')">${svgIcon('edit')}</button>
+              <button class="icon-btn danger" onclick="event.stopPropagation(); deleteCard('${c.id}')">${svgIcon('trash')}</button>
             </div>
           </div>
           <div class="mono" style="font-size:21px; font-weight:700; margin-top:14px;">${fmtMoney(total)}</div>
-          <div class="hint">fatura de ${esc(ymLabel(ym))}</div>
+          <div class="hint">fatura de ${esc(ymLabel(ym))} ${selected?' · <b style="color:var(--accent)">selecionado</b>':''}</div>
         </div>`;
       }).join('')}
     </div>` : `<div class="card card-pad" style="margin-bottom:16px;">${emptyState('💳','Nenhum cartão cadastrado. Adicione um cartão para lançar compras parceladas.')}</div>`}
 
-    <div class="card card-pad" style="margin:16px 0;">
-      <h3 style="font-size:14px; margin-bottom:6px;">Compras na fatura de ${esc(ymLabel(ym))}</h3>
-      ${activePurchases.length ? activePurchases.map(p=>rowPurchase(p, ym)).join('') : emptyState('🛍️','Nenhuma compra parcelada nesta fatura.')}
+    <div class="toolbar card card-pad" style="margin-top:16px;">
+      <input class="grow" type="search" placeholder="Buscar despesa pela descrição…" value="${esc(cardFilters.q)}" oninput="cardFilters.q=this.value; renderCards();">
+      ${filterCard ? `<span class="chip active" onclick="clearCardFilter()">${esc(filterCard.name)} ✕</span>` : `<span class="hint">Clique num cartão acima pra ver só as despesas dele</span>`}
+    </div>
+
+    <div class="card card-pad" style="margin-bottom:16px;">
+      <h3 style="font-size:14px; margin-bottom:6px;">Compras ${filterCard?`de ${esc(filterCard.name)} `:''}na fatura de ${esc(ymLabel(ym))}</h3>
+      ${activePurchases.length ? activePurchases.map(p=>rowPurchase(p, ym)).join('') : emptyState('🛍️', q||filterCard ? 'Nenhuma compra encontrada com esse filtro.' : 'Nenhuma compra parcelada nesta fatura.')}
     </div>
 
     <div class="card card-pad">
-      <h3 style="font-size:14px; margin-bottom:6px;">Todos os parcelamentos</h3>
+      <h3 style="font-size:14px; margin-bottom:6px;">${filterCard?`Parcelamentos de ${esc(filterCard.name)}`:'Todos os parcelamentos'}</h3>
       <div class="table-wrap"><table>
         <thead><tr><th>Descrição</th><th>Cartão</th><th>Categoria</th><th>Progresso</th><th>Total</th><th></th></tr></thead>
         <tbody>
-          ${state.purchases.slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).map(p=>{
+          ${allPurchases.map(p=>{
             const inst = installmentForMonth(p, ym);
             const idx = Math.min(Math.max(ymDiff(p.firstMonth, ym)+1, 0), p.installments);
             const pct = Math.round((idx/p.installments)*100);
@@ -1239,7 +1272,7 @@ function renderCards(){
                 <button class="icon-btn danger" onclick="deletePurchase('${p.id}')">${svgIcon('trash')}</button>
               </td>
             </tr>`;
-          }).join('') || `<tr><td colspan="6">${emptyState('🛍️','Nenhuma compra parcelada cadastrada.')}</td></tr>`}
+          }).join('') || `<tr><td colspan="6">${emptyState('🛍️', q||filterCard ? 'Nenhuma compra encontrada com esse filtro.' : 'Nenhuma compra parcelada cadastrada.')}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1724,8 +1757,42 @@ function renderSettings(){
   const members = Object.entries(hh.memberNames||{});
   const cats = state.categories.slice().sort((a,b)=> a.type===b.type ? a.name.localeCompare(b.name) : (a.type==='despesa'?-1:1));
 
+  const ym = state.month;
+  const incomePayments = monthIncomePayments(ym).slice().sort((a,b)=> new Date(a.payDate)-new Date(b.payDate));
+  const incomeTemplates = state.incomes.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const totalFixedIncome = incomePayments.reduce((s,i)=>s+(Number(i.amount)||0),0);
+
   $('#view').innerHTML = `
     <div class="view-head"><div><h2>Configurações</h2><p>Preferências do lar financeiro</p></div></div>
+
+    <div class="card card-pad" style="margin-bottom:14px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; flex-wrap:wrap; gap:8px;">
+        <h3 style="font-size:14px;">Renda fixa — ${esc(ymLabel(ym))}</h3>
+        <button class="btn btn-soft btn-sm" onclick="openIncomeModal()">${svgIcon('plus')} Nova renda fixa</button>
+      </div>
+      <p class="hint" style="margin-top:0; margin-bottom:10px;">Salários e outros recebimentos recorrentes, por pessoa. O valor de cada mês pode ser editado sem mexer no padrão — útil quando o salário varia (hora extra, adiantamento etc).</p>
+      ${incomePayments.length ? incomePayments.map(rowIncomePayment).join('') : emptyState('💰','Nenhuma renda fixa cadastrada ainda.')}
+      ${incomePayments.length ? `<div style="display:flex; justify-content:flex-end; padding:10px 4px 0; font-size:13px; font-weight:700;">Total do mês: <span class="mono" style="color:var(--income); margin-left:6px;">${fmtMoney(totalFixedIncome)}</span></div>` : ''}
+      <div class="divider"></div>
+      <div class="hint" style="margin-bottom:8px;">Modelos cadastrados</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Nome</th><th>Pessoa</th><th>Valor padrão</th><th>Dia</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          ${incomeTemplates.map(i=>`
+            <tr>
+              <td><b>${esc(i.name)}</b></td>
+              <td>${esc(personName(i.personId))}</td>
+              <td class="mono">${fmtMoney(i.amount)}</td>
+              <td>${i.payDay||1}</td>
+              <td>${i.active!==false?'<span class="badge badge-income">Ativa</span>':'<span class="badge badge-neutral">Pausada</span>'}</td>
+              <td style="text-align:right;">
+                <button class="icon-btn" onclick="openIncomeModal('${i.id}')">${svgIcon('edit')}</button>
+                <button class="icon-btn danger" onclick="deleteIncomeTemplate('${i.id}')">${svgIcon('trash')}</button>
+              </td>
+            </tr>`).join('') || `<tr><td colspan="6">${emptyState('🏷️','Nenhum modelo cadastrado.')}</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
 
     <div class="grid-2" style="align-items:start;">
       <div class="card card-pad" style="margin-bottom:14px;">
@@ -1783,6 +1850,86 @@ function renderSettings(){
       </div>
     </div>
   `;
+}
+
+/* ---------- renda fixa (salários) ---------- */
+function rowIncomePayment(i){
+  return `
+    <div class="list-row">
+      <button class="icon-btn" style="color:${i.received?'var(--income)':'var(--text-faint)'}" onclick="toggleIncomeReceived('${i.id}', ${!i.received})" title="Marcar como ${i.received?'pendente':'recebido'}">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="${i.received?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/>${i.received?'<path d=\"M8 12l3 3 5-6\" stroke=\"white\" fill=\"none\"/>':''}</svg>
+      </button>
+      <div class="ic" style="background:var(--income-soft); color:var(--income)">💰</div>
+      <div class="body"><div class="t">${esc(i.name)}</div><div class="s">${esc(personName(i.personId))} · ${i.received?'Recebido em':'Previsto em'} ${fmtDateBR(i.payDate)}</div></div>
+      <div class="amt inc">${fmtMoney(i.amount)}</div>
+      <div class="actions">
+        <button class="icon-btn" onclick="openIncomePaymentModal('${i.id}')">${svgIcon('edit')}</button>
+        <button class="icon-btn danger" onclick="deleteIncomePayment('${i.id}')">${svgIcon('trash')}</button>
+      </div>
+    </div>`;
+}
+async function toggleIncomeReceived(id, received){ await setDoc('incomePayments', id, {received, receivedDate: received ? todayISO() : null}); }
+async function deleteIncomePayment(id){ if(confirm('Remover este recebimento do mês?')) await removeDoc('incomePayments', id); }
+
+function openIncomePaymentModal(id){
+  const i = state.incomePayments.find(x=>x.id===id); if(!i) return;
+  openModal('Editar recebimento do mês', `
+    <div class="field"><label>Nome</label><input type="text" id="ipName" value="${esc(i.name)}"></div>
+    <div class="field-row">
+      <div class="field"><label>Valor (R$)</label><input type="number" step="0.01" id="ipAmount" value="${i.amount}"></div>
+      <div class="field"><label>Data</label><input type="date" id="ipDate" value="${(i.payDate||'').slice(0,10)}"></div>
+    </div>
+    <div class="field" style="display:flex; align-items:center; gap:8px;">
+      <input type="checkbox" id="ipReceived" style="width:auto" ${i.received?'checked':''}><label style="margin:0">Já foi recebido</label>
+    </div>
+  `, `
+    <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn btn-primary" onclick="saveIncomePayment('${id}')">Salvar</button>
+  `);
+}
+async function saveIncomePayment(id){
+  const ok = await setDoc('incomePayments', id, {
+    name: $('#ipName').value.trim(), amount: parseFloat($('#ipAmount').value)||0,
+    payDate: new Date($('#ipDate').value).toISOString(), received: $('#ipReceived').checked,
+    receivedDate: $('#ipReceived').checked ? todayISO() : null,
+  });
+  if(ok){ closeModal(); toast('Recebimento atualizado.','ok'); }
+}
+
+function openIncomeModal(id){
+  const editing = id ? state.incomes.find(i=>i.id===id) : null;
+  const members = householdMembers();
+  openModal(editing?'Editar renda fixa':'Nova renda fixa', `
+    <div class="field"><label>Nome</label><input type="text" id="iName" placeholder="Ex: Salário, Adiantamento" value="${esc(editing?editing.name:'')}"></div>
+    <div class="field-row">
+      <div class="field"><label>Valor (R$)</label><input type="number" step="0.01" id="iAmount" value="${editing?editing.amount:''}"></div>
+      <div class="field"><label>Dia do mês</label><input type="number" min="1" max="31" id="iPayDay" value="${editing?editing.payDay:5}"></div>
+    </div>
+    <div class="field"><label>Pessoa</label><select id="iPerson">${members.map(m=>`<option value="${m.id}" ${editing&&editing.personId===m.id?'selected':''}>${esc(m.name)}</option>`).join('')}</select></div>
+    ${editing?`<div class="field" style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="iActive" style="width:auto" ${editing.active!==false?'checked':''}><label style="margin:0">Ativa (gera recebimento todo mês)</label></div>`:''}
+    <p class="hint">O valor pode variar mês a mês — depois de gerado, edite o valor daquele mês específico sem alterar este padrão.</p>
+    <div class="error-text" id="iError"></div>
+  `, `
+    ${editing?`<button class="btn btn-danger" onclick="deleteIncomeTemplate('${editing.id}')">${svgIcon('trash')} Excluir</button>`:''}
+    <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn btn-primary" onclick="saveIncomeTemplate(${editing?`'${editing.id}'`:'null'})">Salvar</button>
+  `);
+}
+async function saveIncomeTemplate(id){
+  const name = $('#iName').value.trim();
+  const amount = parseFloat($('#iAmount').value);
+  if(!name || !amount || amount<=0){ $('#iError').textContent='Preencha nome e valor.'; return; }
+  const data = {
+    name, amount, payDay: parseInt($('#iPayDay').value)||5,
+    personId: $('#iPerson').value,
+    active: id ? $('#iActive').checked : true,
+  };
+  const ok = id ? await setDoc('incomes', id, data) : await addDoc('incomes', data);
+  if(ok){ closeModal(); toast('Renda fixa salva.','ok'); ensureMonthGenerated(state.month).then(router); }
+}
+async function deleteIncomeTemplate(id){
+  if(!confirm('Excluir este modelo de renda fixa? Os recebimentos já gerados em meses não serão apagados.')) return;
+  if(await removeDoc('incomes', id)){ closeModal(); toast('Renda fixa excluída.','ok'); }
 }
 
 function setTheme(t){ state.theme=t; localStorage.setItem('fin_theme', t); applyTheme(); renderSettings(); }
