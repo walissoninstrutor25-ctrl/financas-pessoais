@@ -956,20 +956,48 @@ function chartGridColor(){ return getComputedStyle(document.documentElement).get
    PAINEL (DASHBOARD)
    ========================================================= */
 const dashboardFilters = { date: '' };
+function dueItemsForMonth(ym){
+  const items = [];
+  monthBillPayments(ym).filter(b=>!b.paid).forEach(b=>{
+    items.push({date:(b.dueDate||'').slice(0,10), amount:Number(b.amount)||0, html: rowBillPayment(b)});
+  });
+  state.cards.forEach(c=>{
+    const total = cardInvoiceTotal(c.id, ym);
+    if(total>0){
+      const dueDateStr = ymDate(ym, c.dueDay||1).toISOString().slice(0,10);
+      items.push({date:dueDateStr, amount:total, html: rowCardDue(c, total, ym)});
+    }
+  });
+  monthTransactions(ym).filter(t=>t.type==='despesa' && t.status==='pendente').forEach(t=>{
+    items.push({date:t.date, amount:Number(t.amount)||0, html: rowTxFull(t)});
+  });
+  return items;
+}
+function rowCardDue(c, total, ym){
+  return `
+    <div class="list-row" style="cursor:pointer;" onclick="cardFilters.cardId='${c.id}'; navigate('cartoes');">
+      <div class="ic" style="background:${c.color||'#4f46e5'}22; color:${c.color||'#4f46e5'}">💳</div>
+      <div class="body"><div class="t">${esc(c.name)}</div><div class="s">Fatura de ${esc(ymLabel(ym))}</div></div>
+      <div class="amt exp">${fmtMoney(total)}</div>
+    </div>`;
+}
+
 function renderDashboard(){
   const ym = state.month;
   const sum = monthSummary(ym);
   const filterDate = dashboardFilters.date;
-  let upcoming;
+  let upcoming, pendingTotal;
   if(filterDate){
     const filterYm = filterDate.slice(0,7);
     if(filterYm !== ym && filterYm !== ymAdd(ym,1)) ensureMonthGenerated(filterYm);
-    upcoming = state.billPayments.filter(b=>!b.paid && (b.dueDate||'').slice(0,10)===filterDate)
-      .sort((a,b)=> new Date(a.dueDate) - new Date(b.dueDate));
+    upcoming = dueItemsForMonth(filterYm).filter(it=>it.date===filterDate).sort((a,b)=>a.date.localeCompare(b.date));
+    pendingTotal = upcoming.reduce((s,it)=>s+it.amount, 0);
   } else {
     upcoming = monthBillPayments(ym).filter(b=>!b.paid)
       .concat(monthBillPayments(ymAdd(ym,1)).filter(b=>!b.paid))
-      .sort((a,b)=> new Date(a.dueDate) - new Date(b.dueDate)).slice(0,6);
+      .sort((a,b)=> new Date(a.dueDate) - new Date(b.dueDate)).slice(0,6)
+      .map(b=>({html: rowUpcomingBill(b)}));
+    pendingTotal = sum.pending;
   }
   const recentTx = state.transactions.slice().sort((a,b)=> (b.date||'').localeCompare(a.date||'') || (b.createdAt||0)-(a.createdAt||0)).slice(0,6);
   const breakdown = categoryBreakdown(ym).slice(0,7);
@@ -997,7 +1025,7 @@ function renderDashboard(){
       <div class="card stat-card clickable" onclick="openMonthDetailModal('receitas')"><div class="lbl">Receitas do mês</div><div class="val mono" style="color:var(--income)">${fmtMoney(sum.income)}</div></div>
       <div class="card stat-card clickable" onclick="openMonthDetailModal('despesas')"><div class="lbl">Despesas do mês</div><div class="val mono" style="color:var(--expense)">${fmtMoney(sum.expense)}</div></div>
       <div class="card stat-card clickable" onclick="openMonthDetailModal('saldo')"><div class="lbl">Saldo do mês</div><div class="val mono" style="color:${sum.saldo>=0?'var(--income)':'var(--expense)'}">${fmtMoney(sum.saldo)}</div></div>
-      <div class="card stat-card clickable" onclick="openMonthDetailModal('pendentes')"><div class="lbl">Contas pendentes</div><div class="val mono" style="color:var(--warning)">${fmtMoney(sum.pending)}</div></div>
+      <div class="card stat-card clickable" onclick="openMonthDetailModal('pendentes')"><div class="lbl">Contas pendentes${filterDate?` · ${fmtDateBR(filterDate)}`:''}</div><div class="val mono" style="color:var(--warning)">${fmtMoney(pendingTotal)}</div></div>
     </div>
 
     <div class="grid-charts">
@@ -1024,7 +1052,7 @@ function renderDashboard(){
             ${filterDate?`<button class="icon-btn" onclick="dashboardFilters.date=''; renderDashboard();" title="Limpar filtro">✕</button>`:''}
           </div>
         </div>
-        ${upcoming.length ? upcoming.map(rowUpcomingBill).join('') : emptyState('✅', filterDate ? 'Nenhuma conta vence nessa data.' : 'Nenhuma conta pendente por perto.')}
+        ${upcoming.length ? upcoming.map(it=>it.html).join('') : emptyState('✅', filterDate ? 'Nenhuma conta vence nessa data.' : 'Nenhuma conta pendente por perto.')}
       </div>
     </div>
   `;
@@ -1168,9 +1196,16 @@ function openMonthDetailModal(kind){
     body = fixedIncomeSectionHtml(ym) + variableIncomeSectionHtml(ym);
     if(!body) body = emptyState('💤','Nenhuma receita neste mês ainda.');
   } else if(kind==='pendentes'){
-    title = `Contas pendentes — ${ymLabel(ym)}`;
-    const rows = monthBillPayments(ym).filter(b=>!b.paid);
-    body = rows.length ? rows.map(rowBillPayment).join('') : emptyState('🎉','Nenhuma conta pendente neste mês!');
+    if(dashboardFilters.date){
+      const fd = dashboardFilters.date;
+      title = `Contas pendentes — ${fmtDateBR(fd)}`;
+      const items = dueItemsForMonth(fd.slice(0,7)).filter(it=>it.date===fd);
+      body = items.length ? items.map(it=>it.html).join('') : emptyState('🎉','Nenhuma conta pendente nessa data!');
+    } else {
+      title = `Contas pendentes — ${ymLabel(ym)}`;
+      const rows = monthBillPayments(ym).filter(b=>!b.paid);
+      body = rows.length ? rows.map(rowBillPayment).join('') : emptyState('🎉','Nenhuma conta pendente neste mês!');
+    }
   } else if(kind==='saldo'){
     title = `Receitas x despesas de ${ymLabel(ym)}`;
     body = fixedIncomeSectionHtml(ym) + variableIncomeSectionHtml(ym) + billsSectionHtml(ym) + cardsSectionHtml(ym) + variableExpenseSectionHtml(ym);
