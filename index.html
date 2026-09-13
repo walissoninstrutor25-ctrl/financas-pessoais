@@ -163,12 +163,24 @@
   .divider{height:1px; background:var(--line); margin:16px 0; border:none;}
 
   /* ---------- app layout ---------- */
-  #authScreen{min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;
-    background:
-      radial-gradient(circle at 12% 8%, rgba(79,70,229,0.14), transparent 45%),
-      radial-gradient(circle at 90% 90%, rgba(124,58,237,0.12), transparent 45%),
-      var(--bg);
+  #authScreen{min-height:100vh; display:flex;}
+  .auth-hero{
+    flex:1.15; position:relative; min-height:100vh;
+    background-image:url('assets/foto-capa.jpg'); background-size:cover; background-position:center;
+    display:flex; align-items:flex-end; padding:56px;
   }
+  .auth-hero::before{
+    content:''; position:absolute; inset:0;
+    background:
+      linear-gradient(180deg, rgba(10,9,20,0.05) 0%, rgba(10,9,20,0.82) 100%),
+      linear-gradient(100deg, rgba(79,70,229,0.38), rgba(124,58,237,0.08) 60%);
+  }
+  .auth-hero-content{position:relative; z-index:1; max-width:460px; color:#fff;}
+  .auth-hero-content .auth-logo{justify-content:flex-start; margin-bottom:26px;}
+  .auth-hero-content .auth-logo span{color:#fff;}
+  .auth-hero-title{font-family:'Manrope',sans-serif; font-size:29px; font-weight:800; line-height:1.28; margin-bottom:12px; text-wrap:balance;}
+  .auth-hero-sub{font-size:14.5px; line-height:1.6; opacity:0.88; max-width:400px;}
+  .auth-panel{flex:1; display:flex; align-items:center; justify-content:center; padding:32px 24px;}
   .auth-box{width:100%; max-width:400px;}
   .auth-logo{display:flex; align-items:center; gap:10px; margin-bottom:22px; justify-content:center;}
   .auth-logo img{width:40px; height:40px; border-radius:11px;}
@@ -265,6 +277,11 @@
   .bottom-nav{display:none;}
   .menu-toggle{display:none;}
   @media (max-width: 900px){
+    #authScreen{flex-direction:column;}
+    .auth-hero{flex:none; min-height:0; height:34vh; padding:24px;}
+    .auth-hero-sub{display:none;}
+    .auth-hero-title{font-size:21px;}
+    .auth-panel{padding:28px 20px 44px;}
     .sidebar{position:fixed; left:0; top:0; bottom:0; z-index:60; transform:translateX(-100%); transition:transform .2s ease; box-shadow:var(--shadow-lg);}
     .sidebar.open{transform:none;}
     .menu-toggle{display:flex;}
@@ -295,8 +312,15 @@
 <body>
 
 <div id="authScreen">
+  <div class="auth-hero">
+    <div class="auth-hero-content">
+      <div class="auth-logo"><img src="assets/financas-logo-192.png" alt=""><span>Finanças Pessoais</span></div>
+      <h2 class="auth-hero-title">Organize a vida financeira da sua família</h2>
+      <p class="auth-hero-sub">Contas fixas, cartões, metas e relatórios em um só lugar — compartilhado entre vocês dois, do jeito que a vida real funciona.</p>
+    </div>
+  </div>
+  <div class="auth-panel">
   <div class="auth-box">
-    <div class="auth-logo"><img src="assets/financas-logo-192.png" alt=""><span>Finanças Pessoais</span></div>
     <div class="card card-pad">
       <div class="auth-tabs">
         <div class="auth-tab active" id="tabLogin" onclick="setAuthTab('login')">Entrar</div>
@@ -328,6 +352,7 @@
       </form>
     </div>
     <p class="hint" style="text-align:center; margin-top:14px;">Seus dados ficam privados no seu lar financeiro, protegidos por login.</p>
+  </div>
   </div>
 </div>
 
